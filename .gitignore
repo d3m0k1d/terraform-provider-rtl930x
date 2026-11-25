@@ -3,7 +3,7 @@
 !.env.example
 
 tmp/
-testdata/runtime/
+testdata/
 
 *.log
 *.out
