@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ func (c *Client) Connect() error {
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         c.config.Timeout,
 	}
-	client, err := ssh.Dial("tcp", c.config.Host, config)
+	client, err := ssh.Dial("tcp", net.JoinHostPort(c.config.Host, fmt.Sprintf("%d", c.config.Port)), config)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
@@ -97,26 +98,28 @@ func (c *Client) Execute(command string) (string, error) {
 	if _, err := c.stdin.Write([]byte(command + "\n")); err != nil {
 		return "", fmt.Errorf("write command: %w", err)
 	}
-	builder := strings.Builder{}
-	for {
-		output, err := c.stdout.ReadByte()
-		if err != nil {
-			return "", fmt.Errorf("read output: %w", err)
-		}
-		builder.WriteByte(output)
-	}
-	return "", nil
+	return c.Read(command)
 }
 
-func (c *Client) Read() (string, error) {
+func (c *Client) Read(command string) (string, error) {
 	if c.stdout == nil {
 		return "", fmt.Errorf("read: client is not connected")
 	}
-	output, err := c.stdout.ReadString('>')
-	if err != nil {
-		return "", fmt.Errorf("read output: %w", err)
+	var output strings.Builder
+	promptCount := 0
+	for {
+		b, err := c.stdout.ReadByte()
+		if err != nil {
+			return "", fmt.Errorf("read output: %w", err)
+		}
+		output.WriteByte(b)
+		if b == '#' {
+			promptCount++
+		}
+		if promptCount == 2 {
+			return output.String(), nil
+		}
 	}
-	return output, nil
 }
 
 func (c *Client) Configure(commands ...string) error {
@@ -126,4 +129,9 @@ func (c *Client) Configure(commands ...string) error {
 		}
 	}
 	return nil
+}
+func New(config Config) *Client {
+	return &Client{
+		config: config,
+	}
 }
