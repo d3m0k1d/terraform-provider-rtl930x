@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+
+tmp/
+testdata/runtime/
+
+*.log
+*.out
+coverage.*
