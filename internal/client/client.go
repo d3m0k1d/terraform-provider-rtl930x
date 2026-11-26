@@ -3,12 +3,12 @@ package client
 import (
 	"bufio"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type Config struct {
@@ -16,6 +16,7 @@ type Config struct {
 	Port     uint16
 	Username string
 	Password string
+	Hostname string
 	Timeout  time.Duration
 }
 
@@ -25,6 +26,7 @@ type Client struct {
 	session *ssh.Session
 	stdout  *bufio.Reader
 	stdin   io.WriteCloser
+	prompt  *regexp.Regexp
 }
 
 func (c *Client) Connect() error {
@@ -76,6 +78,10 @@ func (c *Client) Connect() error {
 	c.session = session
 	c.stdin = stdin
 	c.stdout = bufio.NewReader(stdout)
+	if _, err := c.Read(""); err != nil {
+		c.Close()
+		return fmt.Errorf("read initial prompt: %w", err)
+	}
 	return nil
 }
 
@@ -100,26 +106,48 @@ func (c *Client) Execute(command string) (string, error) {
 	}
 	return c.Read(command)
 }
-
 func (c *Client) Read(command string) (string, error) {
-	if c.stdout == nil {
-		return "", fmt.Errorf("read: client is not connected")
+	if c.stdout == nil || c.prompt == nil {
+		return "", fmt.Errorf("read: client is not initialized")
 	}
+
 	var output strings.Builder
-	promptCount := 0
+	var line strings.Builder
+
 	for {
 		b, err := c.stdout.ReadByte()
 		if err != nil {
 			return "", fmt.Errorf("read output: %w", err)
 		}
-		output.WriteByte(b)
-		if b == '#' {
-			promptCount++
+
+		switch b {
+		case '\r':
+			continue
+
+		case '\n':
+			output.WriteString(line.String())
+			output.WriteByte('\n')
+			line.Reset()
+
+		default:
+			line.WriteByte(b)
 		}
-		if promptCount == 2 {
-			return output.String(), nil
+
+		if b == '#' || b == '>' {
+			if c.prompt.MatchString(strings.TrimSpace(line.String())) {
+				break
+			}
 		}
 	}
+
+	result := strings.Trim(output.String(), "\r\n")
+
+	first, rest, _ := strings.Cut(result, "\n")
+	if command != "" && strings.TrimSpace(first) == command {
+		result = rest
+	}
+
+	return result, nil
 }
 
 func (c *Client) Configure(commands ...string) error {
@@ -131,7 +159,13 @@ func (c *Client) Configure(commands ...string) error {
 	return nil
 }
 func New(config Config) *Client {
+	promptPattern := `^[[:alnum:]_.-]+(?:\([^\r\n]*\))?[#>]$`
+	if config.Hostname != "" {
+		promptPattern = `^` + regexp.QuoteMeta(config.Hostname) + `(?:\([^\r\n]*\))?[#>]$`
+	}
+
 	return &Client{
 		config: config,
+		prompt: regexp.MustCompile(promptPattern),
 	}
 }
